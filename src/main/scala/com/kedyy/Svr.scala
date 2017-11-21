@@ -19,7 +19,7 @@ class Svr extends Logger {
 
     override def initChannel(ch: SocketChannel): Unit = {
 
-      ch.pipeline().addLast(new CipherHandler(true, "aes-128-cfb", "123ss"))
+      ch.pipeline().addLast(new CipherHandler(true, "aes-128-cfb", "123"))
       ch.pipeline().addLast(Socks5ServerEncoder.DEFAULT)
       ch.pipeline().addLast(new Socks5InitialRequestDecoder)
       ch.pipeline().addLast(new Socks5CommandRequestDecoder)
@@ -76,12 +76,21 @@ class Svr extends Logger {
                   }
                 }
               }))
+            case Socks5CommandType.CONNECT =>
+              logger info "Now does not support"
+
+            case Socks5CommandType.BIND =>
+
           }
 
         case buff: ByteBuf =>
           logger info "forward client's message to remote_server"
           remote.foreach(future => future.channel().writeAndFlush(buff))
       }
+    }
+
+    override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
+      logger error s"${ctx.channel().remoteAddress()} error"
     }
   }
 
