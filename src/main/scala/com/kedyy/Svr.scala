@@ -19,21 +19,21 @@ class Svr extends Logger {
 
     override def initChannel(ch: SocketChannel): Unit = {
 
-      ch.pipeline().addLast(new CipherHandler(true, "aes-128-cfb", "123"))
+      ch.pipeline().addLast(new CipherHandler(true, "aes-128-cfb", "123ss"))
       ch.pipeline().addLast(Socks5ServerEncoder.DEFAULT)
       ch.pipeline().addLast(new Socks5InitialRequestDecoder)
       ch.pipeline().addLast(new Socks5CommandRequestDecoder)
-      ch.pipeline().addLast(new hhh)
+      ch.pipeline().addLast(new SockSvrHandler)
     }
   }
 
 
-  class hhh extends ChannelInboundHandlerAdapter {
-    var remote: ChannelFuture = _
+  class SockSvrHandler extends ChannelInboundHandlerAdapter {
+    var remote: Option[ChannelFuture] = None
 
     override def channelInactive(ctx: ChannelHandlerContext): Unit = {
       logger info "client close"
-      remote.channel().close()
+      remote.foreach(c => c.channel().close())
     }
 
     override def channelRead(ctx: ChannelHandlerContext, msg: scala.Any): Unit = {
@@ -48,19 +48,17 @@ class Svr extends Logger {
 
         case v5: DefaultSocks5CommandRequest =>
           // Sock5 指令（要求 代理、绑定、或者其他）
-          logger info "socks5 coming"
           v5.`type`() match {
             case Socks5CommandType.CONNECT =>
-              remote = client
+              remote = Some(client
                 .handler(new ChannelInitializer[SocketChannel] {
                   override def initChannel(ch: SocketChannel): Unit = {
-                    logger info "hah init to connect"
                   }
                 })
                 .connect(v5.dstAddr(), v5.dstPort()).addListener(new ChannelFutureListener {
                 override def operationComplete(future: ChannelFuture): Unit = {
                   if (future.isSuccess) {
-                    logger info "connect remote success"
+                    logger info s"connect remote ${v5.toString} success"
                     ctx.writeAndFlush(new DefaultSocks5CommandResponse(Socks5CommandStatus.SUCCESS, v5.dstAddrType()))
                     future.channel().pipeline().addLast(new ChannelInboundHandlerAdapter {
                       override def channelRead(cc: ChannelHandlerContext, msg: scala.Any): Unit = {
@@ -69,7 +67,7 @@ class Svr extends Logger {
                       }
 
                       override def channelInactive(c: ChannelHandlerContext): Unit = {
-                        logger info "remote close"
+                        logger info s"remote $v5 close"
                         ctx.writeAndFlush(new DefaultSocks5CommandResponse(Socks5CommandStatus.FAILURE, v5.dstAddrType()))
                       }
                     })
@@ -77,12 +75,12 @@ class Svr extends Logger {
                     ctx.writeAndFlush(new DefaultSocks5CommandResponse(Socks5CommandStatus.FAILURE, v5.dstAddrType()))
                   }
                 }
-              })
+              }))
           }
 
         case buff: ByteBuf =>
           logger info "forward client's message to remote_server"
-          remote.channel().writeAndFlush(buff)
+          remote.foreach(future => future.channel().writeAndFlush(buff))
       }
     }
   }

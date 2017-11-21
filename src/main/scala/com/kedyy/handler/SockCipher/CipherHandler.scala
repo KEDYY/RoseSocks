@@ -4,8 +4,8 @@ import java.security.{MessageDigest, SecureRandom}
 import javax.crypto.Cipher
 import javax.crypto.spec.{IvParameterSpec, SecretKeySpec}
 
-import com.kedyy.Logger
 import com.kedyy.utils.DataUtil
+import com.kedyy.{CipherParam, Logger}
 import io.netty.buffer.ByteBuf
 import io.netty.channel.{ChannelDuplexHandler, ChannelHandlerContext, ChannelPromise}
 import org.bouncycastle.jce.provider.BouncyCastleProvider
@@ -40,14 +40,14 @@ class CipherHandler(isServer: Boolean, cipherName: String, key: String) extends 
 
 class SecureObject(isServer: Boolean, cipherName: String, key: String) extends Logger with DataUtil {
 
+  private val cipherInfo = CipherParam.getParam(cipherName)
+
   private def getKeySize: Int = {
-    //"AES/CFB/NoPadding"
-    16
+    cipherInfo.keySize
   }
 
   private def getIvSize: Int = {
-    //"AES/CFB/NoPadding"
-    16
+    cipherInfo.ivSize
   }
 
   def randBytes(len: Int): Array[Byte] = {
@@ -59,7 +59,7 @@ class SecureObject(isServer: Boolean, cipherName: String, key: String) extends L
   def kdf(): (Array[Byte], Array[Byte]) = {
     val password = key.getBytes()
     val m: scala.collection.mutable.Queue[Array[Byte]] = scala.collection.mutable.Queue()
-    val md5 = MessageDigest.getInstance("MD5")
+    val md5 = MessageDigest.getInstance("MD5", new BouncyCastleProvider())
     var data = password
     var c = 0
     while (m.flatten.size < getKeySize + getIvSize) {
@@ -76,48 +76,30 @@ class SecureObject(isServer: Boolean, cipherName: String, key: String) extends L
 
   var ivSend: Boolean = false
   var ivRecv: Boolean = false
-  private[this] val e = Cipher.getInstance("AES/CFB/NoPadding", new BouncyCastleProvider())
-  private[this] val d = Cipher.getInstance("AES/CFB/NoPadding", new BouncyCastleProvider())
+  private[this] val e = Cipher.getInstance(cipherInfo.cipherName, new BouncyCastleProvider())
+  private[this] val d = Cipher.getInstance(cipherInfo.cipherName, new BouncyCastleProvider())
   val (clearKey, _) = kdf()
-  logger info "Key::" + ArrayByte2HexString(clearKey)
 
   def encrypt(bytes: Array[Byte]): Array[Byte] = {
-    logger info "before encrypt:" + ArrayByte2HexString(bytes)
-    val c = if (!ivSend) {
-      ivSend = true
+    if (!ivSend) {
       val randIv = randBytes(getIvSize)
-      e.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(clearKey, "AES"), new IvParameterSpec(randIv))
+      e.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(clearKey, cipherInfo.cipherName), new IvParameterSpec(randIv))
+      ivSend = true
       randIv ++ e.update(bytes)
     }
     else e.update(bytes)
-    logger info "after encrypt:" + ArrayByte2HexString(c)
-    c
   }
 
   def decrypt(bytes: Array[Byte]): Array[Byte] = {
-    logger info "int:" + ArrayByte2HexString(bytes)
-    val c =
-      if (!ivRecv) {
-        val civ = bytes.take(getIvSize)
-        ivRecv = true
-        logger info "IV::" + ArrayByte2HexString(civ)
-        d.init(Cipher.DECRYPT_MODE, new SecretKeySpec(clearKey, "AES"), new IvParameterSpec(civ))
-        d.update(bytes.drop(getIvSize))
-      }
-      else d.update(bytes)
-    logger info "after decrypt:" + ArrayByte2HexString(c)
-    c
+    if (!ivRecv) {
+      d.init(Cipher.DECRYPT_MODE, new SecretKeySpec(clearKey, cipherInfo.cipherName), new IvParameterSpec(bytes.take(getIvSize)))
+      ivRecv = true
+      d.update(bytes.drop(getIvSize))
+    }
+    else d.update(bytes)
   }
 }
 
 object SecureObject {
   def apply(isServer: Boolean, cipherName: String, key: String): SecureObject = new SecureObject(isServer, cipherName, key)
-}
-
-
-object test extends App with DataUtil {
-  val d = Cipher.getInstance("AES/CFB/NoPadding", new BouncyCastleProvider())
-  d.init(Cipher.DECRYPT_MODE, new SecretKeySpec(HexString2Bytes("202CB962AC59075B964B07152D234B70"), "AES"),
-    new IvParameterSpec(HexString2Bytes("122F7A0FDE101B720FC6C06A6FA87886")))
-  println(ArrayByte2HexString(d.update(HexString2Bytes("4A3F79BBD984B8CA450F5D0BA4B6B47869"))))
 }
