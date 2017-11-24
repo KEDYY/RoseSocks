@@ -1,107 +1,72 @@
 package com.kedyy
 
 import com.kedyy.handler.SockCipher.CipherHandler
+import com.kedyy.handler.SockSvrHandler
+import com.kedyy.handler.shadowsocks.ShadowSocksHandler
 import io.netty.bootstrap.{Bootstrap, ServerBootstrap}
-import io.netty.buffer.ByteBuf
 import io.netty.channel._
 import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.SocketChannel
 import io.netty.channel.socket.nio.{NioServerSocketChannel, NioSocketChannel}
-import io.netty.handler.codec.socksx.v5._
+import io.netty.handler.codec.socksx.v5.{Socks5CommandRequestDecoder, Socks5InitialRequestDecoder, Socks5ServerEncoder}
 
 class Svr extends Logger {
 
   val group = new NioEventLoopGroup()
-  val server = new ServerBootstrap()
   val client = new Bootstrap()
 
-  private[this] val serverLogic = new ChannelInitializer[SocketChannel] {
+  private[this] val socks5 = new ChannelInitializer[SocketChannel] {
 
     override def initChannel(ch: SocketChannel): Unit = {
+      ch.pipeline().addLast(Socks5ServerEncoder.DEFAULT)
+      ch.pipeline().addLast(new Socks5InitialRequestDecoder)
+      ch.pipeline().addLast(new Socks5CommandRequestDecoder)
+      ch.pipeline().addLast(new SockSvrHandler(client))
+    }
+  }
 
+  private[this] val roseSocks = new ChannelInitializer[SocketChannel] {
+
+    override def initChannel(ch: SocketChannel): Unit = {
       ch.pipeline().addLast(new CipherHandler(true, "aes-128-cfb", "123"))
       ch.pipeline().addLast(Socks5ServerEncoder.DEFAULT)
       ch.pipeline().addLast(new Socks5InitialRequestDecoder)
       ch.pipeline().addLast(new Socks5CommandRequestDecoder)
-      ch.pipeline().addLast(new SockSvrHandler)
+      ch.pipeline().addLast(new SockSvrHandler(client))
     }
   }
 
+  private[this] val ss = new ChannelInitializer[SocketChannel] {
 
-  class SockSvrHandler extends ChannelInboundHandlerAdapter {
-    var remote: Option[ChannelFuture] = None
-
-    override def channelInactive(ctx: ChannelHandlerContext): Unit = {
-      logger info "client close"
-      remote.foreach(c => c.channel().close())
-    }
-
-    override def channelRead(ctx: ChannelHandlerContext, msg: scala.Any): Unit = {
-      msg match {
-
-        case auth: DefaultSocks5InitialRequest =>
-          // Socks5 接入认证
-          ctx.writeAndFlush(new DefaultSocks5InitialResponse(Socks5AuthMethod.NO_AUTH))
-          ctx.channel().pipeline().remove(classOf[Socks5InitialRequestDecoder])
-          logger info s"$auth"
-
-
-        case v5: DefaultSocks5CommandRequest =>
-          // Sock5 指令（要求 代理、绑定、或者其他）
-          v5.`type`() match {
-            case Socks5CommandType.CONNECT =>
-              remote = Some(client
-                .handler(new ChannelInitializer[SocketChannel] {
-                  override def initChannel(ch: SocketChannel): Unit = {
-                  }
-                })
-                .connect(v5.dstAddr(), v5.dstPort()).addListener(new ChannelFutureListener {
-                override def operationComplete(future: ChannelFuture): Unit = {
-                  if (future.isSuccess) {
-                    logger info s"connect remote ${v5.toString} success"
-                    ctx.writeAndFlush(new DefaultSocks5CommandResponse(Socks5CommandStatus.SUCCESS, v5.dstAddrType()))
-                    future.channel().pipeline().addLast(new ChannelInboundHandlerAdapter {
-                      override def channelRead(cc: ChannelHandlerContext, msg: scala.Any): Unit = {
-                        logger info "forward remote_server's answer to client"
-                        ctx.writeAndFlush(msg)
-                      }
-
-                      override def channelInactive(c: ChannelHandlerContext): Unit = {
-                        logger info s"remote $v5 close"
-                        ctx.writeAndFlush(new DefaultSocks5CommandResponse(Socks5CommandStatus.FAILURE, v5.dstAddrType()))
-                      }
-                    })
-                  } else {
-                    ctx.writeAndFlush(new DefaultSocks5CommandResponse(Socks5CommandStatus.FAILURE, v5.dstAddrType()))
-                  }
-                }
-              }))
-            case Socks5CommandType.CONNECT =>
-              logger info "Now does not support"
-
-            case Socks5CommandType.BIND =>
-
-          }
-
-        case buff: ByteBuf =>
-          logger info "forward client's message to remote_server"
-          remote.foreach(future => future.channel().writeAndFlush(buff))
-      }
-    }
-
-    override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-      logger error s"${ctx.channel().remoteAddress()} error"
+    override def initChannel(ch: SocketChannel): Unit = {
+      ch.pipeline().addLast(new CipherHandler(true, "aes-128-cfb", "123"))
+      ch.pipeline().addLast(new ShadowSocksHandler(client))
     }
   }
+
 
   def loop(): ChannelFuture = {
     client.group(group).channel(classOf[NioSocketChannel])
 
-    server.group(group).channel(classOf[NioServerSocketChannel])
+    new ServerBootstrap().group(group).channel(classOf[NioServerSocketChannel])
       .childOption[java.lang.Boolean](ChannelOption.SO_KEEPALIVE, true)
       .childOption[java.lang.Boolean](ChannelOption.SO_REUSEADDR, true)
-      .childHandler(serverLogic)
-      .bind(8080)
+      .childOption[java.lang.Integer](ChannelOption.SO_BACKLOG, 4096)
+      .childOption[java.lang.Integer](ChannelOption.SO_LINGER, 0)
+      .childHandler(socks5)
+      .bind(1080)
+
+    new ServerBootstrap().group(group).channel(classOf[NioServerSocketChannel])
+      .childOption[java.lang.Boolean](ChannelOption.SO_KEEPALIVE, false)
+      .childOption[java.lang.Boolean](ChannelOption.SO_REUSEADDR, true)
+      .childHandler(roseSocks)
+      .bind(8443)
+
+    new ServerBootstrap().group(group).channel(classOf[NioServerSocketChannel])
+      .childOption[java.lang.Boolean](ChannelOption.SO_KEEPALIVE, false)
+      .childOption[java.lang.Boolean](ChannelOption.SO_REUSEADDR, true)
+      .childHandler(ss)
+      .bind(8444)
   }
 }
 
