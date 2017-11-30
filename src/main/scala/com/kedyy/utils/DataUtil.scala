@@ -6,6 +6,7 @@ trait DataUtil {
   }
 
   def ArrayByte2HexString(array: Array[Byte]): String = {
+    if (array == null) return ""
     val hexString = new StringBuilder(array.length * 2)
     array.foreach(byte => hexString.append("%02X" format byte))
     hexString.toString()

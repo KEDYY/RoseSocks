@@ -2,7 +2,7 @@
 
 name := "SocksWithCipher"
 
-version := "0.1"
+version := "0.2"
 
 description := "Netty Socks5 服务器（输入输出流进行加密）"
 scalaVersion := "2.11.8"
@@ -15,5 +15,5 @@ libraryDependencies ++= Seq(
   "commons-logging" % "commons-logging" % "1.2",
   "org.bouncycastle" % "bcprov-jdk16" % "1.46"
 )
-
+enablePlugins(AssemblyPlugin)
 //unmanagedJars ++= Seq()
